@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2015 Erik Botö (erik.boto@gmail.com)
- * Copyright (c) 2019 Michael Hipp
+ * Copyright (c) 2019 Michael Hipp (totalreverse@mhipp.com)
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the Free
@@ -25,16 +25,20 @@
 #include <QTimer>
 #include <QMutex>
 
-#define FT_IDLE        0x00
-#define FT_ERGOMODE    0x01
-#define FT_SSMODE      0x02
-#define FT_CALIBRATE   0x04
+#define FTS_IDLE        (0x00)
+#define FTS_ERGOMODE    (0x01)
+#define FTS_SSMODE      (0x02)
+#define FTS_CALIBRATE   (0x04)
 
-#define DEFAULT_LOAD         100.00
-#define DEFAULT_GRADIENT     2.00
-#define DEFAULT_WEIGHT       77
-#define DEFAULT_CALIBRATION  0.00
-#define DEFAULT_SCALING      1.00
+#define FTS_DEFAULT_LOAD         (100.00)
+#define FTS_DEFAULT_GRADIENT     (0.00)
+#define FTS_DEFAULT_WEIGHT       (82)
+#define FTS_DEFAULT_CALIBRATION  (0.00)
+#define FTS_DEFAULT_SCALING      (1.00)
+
+
+#define FTS_START_OF_FRAME  (0x01)
+#define FTS_END_OF_FRAME    (0x17)
 
 class FortiusSerialConnection : public QThread
 {
@@ -76,6 +80,7 @@ private:
     double m_load;
     double m_gradient;
     double m_speed;
+    double m_rawspeed;
     double m_powerscale;
     int m_mode;
     uint8_t m_events; // stores last event from trainer to trigger cad-sensor signal

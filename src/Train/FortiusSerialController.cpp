@@ -106,10 +106,10 @@ void FortiusSerialController::pushRealtimeData(RealtimeData &) { } // update rea
 
 void FortiusSerialController::setMode(int mode)
 {
-    if (mode == RT_MODE_ERGO) mode = FT_ERGOMODE;
-    else if (mode == RT_MODE_SPIN) mode = FT_SSMODE;
-    else if (mode == RT_MODE_CALIBRATE) mode = FT_CALIBRATE;
-    else mode = FT_IDLE;
+    if (mode == RT_MODE_ERGO) mode = FTS_ERGOMODE;
+    else if (mode == RT_MODE_SPIN) mode = FTS_SSMODE;
+    else if (mode == RT_MODE_CALIBRATE) mode = FTS_CALIBRATE;
+    else mode = FTS_IDLE;
     m_fortius->setMode(mode);
 }
 

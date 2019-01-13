@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2015 by Erik Botö (erik.boto@gmail.com)
- * Copyright (c) 2019 by ....
+ * Copyright (c) 2019 Michael Hipp (totalreverse@mhipp.com)
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the Free
@@ -26,15 +26,16 @@ FortiusSerialConnection::FortiusSerialConnection() :
     m_serial(0),
     m_pollInterval(1000),
     m_timer(0),
-    m_load(DEFAULT_LOAD),
-    m_gradient(DEFAULT_GRADIENT),
+    m_load(FTS_DEFAULT_LOAD),
+    m_gradient(FTS_DEFAULT_GRADIENT),
     m_speed(0),
-    m_powerscale(DEFAULT_SCALING),
-    m_mode(FT_IDLE),
+    m_rawspeed(0),
+    m_powerscale(FTS_DEFAULT_SCALING),
+    m_mode(FTS_IDLE),
     m_events(0),
     m_power(0),
     m_cadence(0),
-    m_weight(DEFAULT_WEIGHT)
+    m_weight(FTS_DEFAULT_WEIGHT)
 {
 }
 
@@ -76,9 +77,9 @@ QByteArray FortiusSerialConnection::readAnswer(int timeoutMs)
         {
             data.append(m_serial->readAll());
         } else {
-            data.append(0x17);
+            data.append(FTS_END_OF_FRAME);
         }
-    } while ((data.indexOf(0x17) == -1));
+    } while ((data.indexOf(FTS_END_OF_FRAME) == -1));
 
     return unmarshal(data);
 }
@@ -126,12 +127,13 @@ void FortiusSerialConnection::requestAll()
     // Discard any existing data
     m_serial->readAll();
 
-    const double calibration_speed = 20;  // in km/h
-    const double scale_speed     = 290;   // convert to km/h
-    const double scale_power     = 13;    // convert to watt
-    const double scale_slope     = 5*130;
-    const double offset_slope    = -0.4;
-    const double scale_calibrate = 130;
+    const double calibration_speed  = 20;       // in km/h
+    const double kph2rawspeed_magic = 289.75;   // convert km/h to "raw_speed"
+    // const double scale_power     = 13;       // convert to watt
+    const double scale_slope        = 5*130;
+    const double offset_slope       = -0.4;     // -0.4 * scale_slope = -260
+    const double scale_calibrate    = 130;
+    const double power2load_magic   = 128866;   // ??depends on calibration value??? (128866 matchs for calibration 93*13=1209 - instead of standard 80*13=1040)
 
     uint16_t nextLoad = 0;
     uint16_t nextCalibrate = scale_calibrate * (m_calibrate + 8.0);  // m_calibrate range -8.0 ... 8.0
@@ -139,23 +141,46 @@ void FortiusSerialConnection::requestAll()
     uint8_t nextWeight = 0x52;
 
     switch(m_mode) {
-    case FT_ERGOMODE:
-        nextLoad = m_load * scale_power;
+    case FTS_ERGOMODE:
+        // to make it simpler to start: switch off resistance for speeds lower than 5 kph
+        if(m_rawspeed > 5*kph2rawspeed_magic) {
+            nextLoad = power2load_magic * m_load / m_rawspeed;
+        }
         nextMode = 2;
         nextWeight = 0x0a;
         break;
-    case FT_SSMODE:
+    case FTS_SSMODE:
         nextLoad = (m_gradient + offset_slope) * scale_slope;
         nextMode = 2;
         nextWeight = m_weight;
         break;
-    case FT_CALIBRATE:
-        nextLoad = calibration_speed * scale_speed; // 20 kmh
+    case FTS_CALIBRATE:
+        /*
+            Note: default calibration is 0x0410 = 1040 = 80*13 (or 8*130)
+
+            The Tacx TTS4 software calibrates with 20 kph (selectedLoad = 0x16a3). If the 'gauge'
+            of the calibration screen is perfect in the "green" middle of the calibration bar,
+            then TTS4 sets the calibration value to 0x0492 (= 90*13)
+
+            How to find the calibration value without starting the TTS4 software? It'S quite simple:
+
+            The calibration value is exactly the negated value you can read as "resistance" when running
+            the calibration at 20 kph. The resistance is byte #14 & #15 (little endian) in the
+            unmarshalled 25-byte-T1941-data-frame (or Byte #38 and #39 in a 48 bytes data frame
+            from the head unit).
+
+            You start the calibration for 20 kph and for example the avg. "resistance" is about 0xfb70 then
+                1. 0x10000-0xFB70 = 0x490
+                2. Rounded to multiples of 13 is 0x492. (TTS4 rounds to multiples of 13)
+            => your calibration value should be 0x490 (or 0x492)
+        */
+
+        nextLoad = calibration_speed * kph2rawspeed_magic; // 20 km/h
         nextMode = 3;
         nextWeight = 0;
         nextCalibrate = 0;
         break;
-    case FT_IDLE:
+    case FTS_IDLE:
         default:
         break;
     }
@@ -188,11 +213,12 @@ void FortiusSerialConnection::requestAll()
     }
     QByteArray recvData = readAnswer(500);
 
-    double speed;
+    double speed, power;
     //uint32_t totDistance; // total Distance
     uint8_t cadence;
     //uint16_t avgPower, accelerate;  // guessed
-    uint16_t power;    // always the power (*13)
+    int16_t resistance;    // always the power (*13)
+
     //uint16_t theLoad;  // "echos" the load we set
     //uint8_t theMode;  // "echos" the mode we set (T1932 has a non chaning "2" after one command)
     //uint16_t checksum;
@@ -204,13 +230,15 @@ void FortiusSerialConnection::requestAll()
             && recv[1] == 19
             && recv[2] == 2
             && recv[3] == 0) {
-        speed       = (double) (recv[8] | (recv[9]<<8)) / scale_speed;
+        m_rawspeed  = (double) (recv[8] | (recv[9]<<8));
+        speed       = m_rawspeed / kph2rawspeed_magic;
         cadence     = recv[20];
         m_events    = recv[18];  // 0x01 pedal-sensor event, 0x04 brake-stops event
         //totDistance = recv[4]  | (recv[5] << 8)  | (recv[6] << 16)  | (recv[7] << 24);
         //accelerate  = recv[10] | (recv[11]<<8);  // unknwon
         //avgPower    = recv[12] | (recv[13]<<8);  // MAYBE avg. Power
-        power       = (recv[14] | (recv[15]<<8)) / scale_power;
+        resistance       = (recv[14] | (recv[15]<<8));
+        power   =  (double) resistance * m_rawspeed / power2load_magic;
         //theLoad     = recv[16] | (recv[17]<<8);
         //theMode     = recv[22];
         //checksum    = recv[23] | (recv[24]<<8);
@@ -298,7 +326,6 @@ bool FortiusSerialConnection::discover(QString portName)
         send.append('\x00');
         send.append('\x00');
 
-        // Read id from bike
         sp.write(marshal(send));
         sp.waitForBytesWritten(1000);
 
@@ -310,9 +337,9 @@ bool FortiusSerialConnection::discover(QString portName)
             {
                 recvFrame.append(sp.readAll());
             } else {
-                recvFrame.append((char)0x17);
+                recvFrame.append(FTS_END_OF_FRAME);
             }
-        } while ((recvFrame.indexOf((char)0x17) == -1));
+        } while ((recvFrame.indexOf(FTS_END_OF_FRAME) == -1));
 
         QByteArray recvData = unmarshal(recvFrame);
         const unsigned char *recv = reinterpret_cast<const unsigned char*>(recvData.constData());
@@ -397,7 +424,7 @@ QByteArray FortiusSerialConnection::marshal(const QByteArray in)
 {
     QByteArray out;
 
-    out.append(0x01); // Start Of Frame
+    out.append(FTS_START_OF_FRAME); // Start Of Frame
 
     for(int i=0;i<in.length();i++) {
         uint8_t b = in[i];
@@ -412,7 +439,7 @@ QByteArray FortiusSerialConnection::marshal(const QByteArray in)
     out.append(bin2hex((chk>>4)&0xf));
     out.append(bin2hex((chk>>0)&0xf));
 
-    out.append(0x17);  // End of Frame
+    out.append(FTS_END_OF_FRAME);  // End of Frame
 
     return out;
 }
@@ -427,7 +454,7 @@ QByteArray FortiusSerialConnection::unmarshal(const QByteArray in)
         return out;
     }
 
-    if(!in.startsWith(0x01) || !in.endsWith(0x17)) {
+    if(!in.startsWith(FTS_START_OF_FRAME) || !in.endsWith(FTS_END_OF_FRAME)) {
         qDebug() << "no valid frame";
         return out;
     }
