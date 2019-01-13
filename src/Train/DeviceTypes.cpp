@@ -66,6 +66,9 @@ DeviceTypes::DeviceTypes()
       { DEV_DAUM, DEV_SERIAL, (char *)"Daum Cockpit" ,true, false,
         tr("Daum Serial Device ") ,
         ":images/activity.png"},
+      { DEV_FORTIUS_SERIAL, DEV_SERIAL, (char *)"Tacx Fortius (via serial)" ,true, false,
+        tr("Tacx Fortius directly connected via a serial connection.") ,
+        ":images/devices/fortius.png"},
 #endif
 #ifdef GC_HAVE_LIBUSB
       { DEV_FORTIUS,  DEV_LIBUSB,  (char *) "Tacx Fortius",          true,    false,

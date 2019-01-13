@@ -37,6 +37,7 @@
 #include "KettlerController.h"
 #include "KettlerRacerController.h"
 #include "DaumController.h"
+#include "FortiusSerialController.h"
 #endif
 #include "ANTlocalController.h"
 #include "ANTChannel.h"
