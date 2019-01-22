@@ -90,7 +90,7 @@ private:
     quint32 m_calibrate;
     quint32 m_weight;
 
-    static uint8_t hex2bin(uint8_t b);
+    static int8_t hex2bin(uint8_t b);
     static uint8_t bin2hex(uint8_t b);
     static int parity16(uint16_t b);
     static uint16_t checksum(const QByteArray buffer);

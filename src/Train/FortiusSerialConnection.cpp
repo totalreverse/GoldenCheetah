@@ -365,21 +365,21 @@ bool FortiusSerialConnection::discover(QString portName)
     return found;
 }
 
-uint8_t FortiusSerialConnection::hex2bin(uint8_t b)
+int8_t FortiusSerialConnection::hex2bin(uint8_t b)
 {
-    if(b >= 0x30 && b <= 0x39)
-        // '0'..'9'
+    if(b >= 0x30 && b <= 0x39)    // '0'..'9'
         return b - 0x30;
-    if(b >= 0x41 && b <= 0x46)
-        // 'A'..'F'
+    if(b >= 0x41 && b <= 0x46)    // 'A'..'F'
         return b + 10 - 0x41;
-    if(b >= 0x61 && b <= 0x66)
-        // 'a'..'f'
+    if(b >= 0x61 && b <= 0x66)    // 'a'..'f'
         return b + 10 - 0x61;
-    // Fallback to handle case with wrong initialized brake
+    if(b == 0x00) {
+        // Fallback to handle case with wrong initialized brake
+        qDebug() << "hex2bin Fallback for " << b;
+        return 0;
+    }
 
-    qDebug() << "hex2bin Fallback for " << b;
-    return 0;
+    return -1;
 }
 
 uint8_t FortiusSerialConnection::bin2hex(uint8_t b)
@@ -457,6 +457,13 @@ QByteArray FortiusSerialConnection::unmarshal(const QByteArray in)
     if(!in.startsWith(FTS_START_OF_FRAME) || !in.endsWith(FTS_END_OF_FRAME)) {
         qDebug() << "no valid frame";
         return out;
+    }
+
+    for(int i=1;i<len-1;i++) {
+        if(hex2bin(in[i]) < 0) {
+            qDebug() << "illegal data in received data " << in[i];
+            return out;
+        }
     }
 
     uint16_t chk = checksum(in.left(len-5));
