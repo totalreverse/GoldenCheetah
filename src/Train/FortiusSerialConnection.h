@@ -68,6 +68,7 @@ public slots:
     void requestAll();
 
 private:
+
     QString m_serialPortName;
     QSerialPort *m_serial;
     int m_pollInterval;
@@ -80,15 +81,17 @@ private:
     double m_load;
     double m_gradient;
     double m_speed;
-    double m_rawspeed;
     double m_powerscale;
     int m_mode;
-    uint8_t m_events; // stores last event from trainer to trigger cad-sensor signal
 
-    quint32 m_power;
-    quint32 m_cadence;
-    quint32 m_calibrate;
-    quint32 m_weight;
+    uint8_t  m_events;          // stores last event from trainer to trigger cad-sensor signal
+    uint16_t m_rawspeed;
+    uint16_t m_powerhist[10];
+    uint8_t  m_powerindex;
+    uint16_t m_power;
+    uint16_t m_cadence;
+    double m_calibrate;
+    uint16_t m_weight;
 
     static int8_t hex2bin(uint8_t b);
     static uint8_t bin2hex(uint8_t b);

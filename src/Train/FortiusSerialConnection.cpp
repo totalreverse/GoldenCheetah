@@ -29,10 +29,10 @@ FortiusSerialConnection::FortiusSerialConnection() :
     m_load(FTS_DEFAULT_LOAD),
     m_gradient(FTS_DEFAULT_GRADIENT),
     m_speed(0),
-    m_rawspeed(0),
     m_powerscale(FTS_DEFAULT_SCALING),
     m_mode(FTS_IDLE),
     m_events(0),
+    m_rawspeed(0),
     m_power(0),
     m_cadence(0),
     m_weight(FTS_DEFAULT_WEIGHT)
@@ -96,6 +96,12 @@ void FortiusSerialConnection::run()
     m_serial = new QSerialPort();
     m_serial->setPortName(m_serialPortName);
 
+    // we need to average out power for the last second
+    // since we get updates every 10ms (100hz)
+    m_powerindex=0;      // index into the powerhist array
+    for (int i=0; i<10; i++) 
+        m_powerhist[i]=0; 
+
     m_timer = new QTimer();
 
     if (!m_serial->open(QSerialPort::ReadWrite))
@@ -130,7 +136,7 @@ void FortiusSerialConnection::requestAll()
     const double calibration_speed  = 20;       // in km/h
     const double kph2rawspeed_magic = 289.75;   // convert km/h to "raw_speed"
     // const double scale_power     = 13;       // convert to watt
-    const double scale_slope        = 5*130;
+    const double scale_slope        = 2*5*130;
     const double offset_slope       = -0.4;     // -0.4 * scale_slope = -260
     const double scale_calibrate    = 130;
     const double power2load_magic   = 128866;   // ??depends on calibration value??? (128866 matchs for calibration 93*13=1209 - instead of standard 80*13=1040)
@@ -144,7 +150,7 @@ void FortiusSerialConnection::requestAll()
     case FTS_ERGOMODE:
         // to make it simpler to start: switch off resistance for speeds lower than 5 kph
         if(m_rawspeed > 5*kph2rawspeed_magic) {
-            nextLoad = power2load_magic * m_load / m_rawspeed;
+            nextLoad = power2load_magic * m_load / (double) m_rawspeed;
         }
         nextMode = 2;
         nextWeight = 0x0a;
@@ -211,17 +217,7 @@ void FortiusSerialConnection::requestAll()
         // failure to write to device, bail out
         this->exit(-1);
     }
-    QByteArray recvData = readAnswer(500);
-
-    double speed, power;
-    //uint32_t totDistance; // total Distance
-    uint8_t cadence;
-    //uint16_t avgPower, accelerate;  // guessed
-    int16_t resistance;    // always the power (*13)
-
-    //uint16_t theLoad;  // "echos" the load we set
-    //uint8_t theMode;  // "echos" the mode we set (T1932 has a non chaning "2" after one command)
-    //uint16_t checksum;
+    QByteArray recvData = readAnswer(70);
 
     const unsigned char *recv = reinterpret_cast<const unsigned char*>(recvData.constData());
 
@@ -230,26 +226,40 @@ void FortiusSerialConnection::requestAll()
             && recv[1] == 19
             && recv[2] == 2
             && recv[3] == 0) {
-        m_rawspeed  = (double) (recv[8] | (recv[9]<<8));
-        speed       = m_rawspeed / kph2rawspeed_magic;
-        cadence     = recv[20];
-        m_events    = recv[18];  // 0x01 pedal-sensor event, 0x04 brake-stops event
+
+        double speed, power;
+        uint8_t cadence;
+        int16_t resistance;
+        quint32  poweravg;
+
         //totDistance = recv[4]  | (recv[5] << 8)  | (recv[6] << 16)  | (recv[7] << 24);
         //accelerate  = recv[10] | (recv[11]<<8);  // unknwon
         //avgPower    = recv[12] | (recv[13]<<8);  // MAYBE avg. Power
-        resistance       = (recv[14] | (recv[15]<<8));
-        power   =  (double) resistance * m_rawspeed / power2load_magic;
         //theLoad     = recv[16] | (recv[17]<<8);
         //theMode     = recv[22];
         //checksum    = recv[23] | (recv[24]<<8);
 
+        m_rawspeed  = (recv[8] | (recv[9]<<8));
+        speed       = (double) m_rawspeed / kph2rawspeed_magic;
+        cadence     = recv[20];
+        m_events    = recv[18];  // 0x01 pedal-sensor event, 0x04 brake-stops event
+        resistance       = (recv[14] | (recv[15]<<8));
+        power   =  (double) resistance * m_rawspeed / power2load_magic;
+
+        // Avg. power over 10 values
+        m_powerhist[m_powerindex] = power;
+        m_powerindex = (m_powerindex + 1) % 10; 
+        poweravg = 0;
+        for(int i=0;i<10;i++)
+            poweravg += m_powerhist[i];
+        poweravg /= 10;
+
         m_readMutex.lock();
-        m_power = power;
+        m_power = poweravg;
         m_cadence = cadence;
         m_speed = speed;
         m_readMutex.unlock();
     }
-
 
     m_mutex.unlock();
 }
