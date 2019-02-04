@@ -35,6 +35,7 @@ FortiusSerialConnection::FortiusSerialConnection() :
     m_rawspeed(0),
     m_power(0),
     m_cadence(0),
+    m_calibrate(0.0),
     m_weight(FTS_DEFAULT_WEIGHT)
 {
 }
@@ -135,20 +136,20 @@ void FortiusSerialConnection::requestAll()
 
     const double calibration_speed  = 20;       // in km/h
     const double kph2rawspeed_magic = 289.75;   // convert km/h to "raw_speed"
-    // const double scale_power     = 13;       // convert to watt
-    const double scale_slope        = 2*5*130;
+    const double scale_slope        = 2*5*130;  // another "magic" needs to be confirmed 
     const double offset_slope       = -0.4;     // -0.4 * scale_slope = -260
     const double scale_calibrate    = 130;
     const double power2load_magic   = 128866;   // ??depends on calibration value??? (128866 matchs for calibration 93*13=1209 - instead of standard 80*13=1040)
 
-    uint16_t nextLoad = 0;
+    uint16_t nextLoad;
     uint16_t nextCalibrate = scale_calibrate * (m_calibrate + 8.0);  // m_calibrate range -8.0 ... 8.0
-    uint8_t nextMode = 0;
-    uint8_t nextWeight = 0x52;
+    uint8_t nextMode;
+    uint8_t nextWeight;
 
     switch(m_mode) {
     case FTS_ERGOMODE:
         // to make it simpler to start: switch off resistance for speeds lower than 5 kph
+        nextLoad = 0;
         if(m_rawspeed > 5*kph2rawspeed_magic) {
             nextLoad = power2load_magic * m_load / (double) m_rawspeed;
         }
@@ -175,7 +176,7 @@ void FortiusSerialConnection::requestAll()
             unmarshalled 25-byte-T1941-data-frame (or Byte #38 and #39 in a 48 bytes data frame
             from the head unit).
 
-            You start the calibration for 20 kph and for example the avg. "resistance" is about 0xfb70 then
+            When you start the calibration with 20 kph and the avg. "resistance" is for example about 0xfb70 then
                 1. 0x10000-0xFB70 = 0x490
                 2. Rounded to multiples of 13 is 0x492. (TTS4 rounds to multiples of 13)
             => your calibration value should be 0x490 (or 0x492)
@@ -187,27 +188,36 @@ void FortiusSerialConnection::requestAll()
         nextCalibrate = 0;
         break;
     case FTS_IDLE:
-        default:
+    default:
+        nextLoad = 0;
+        nextWeight = 0x52;
+        nextMode = 0;
         break;
     }
 
     QByteArray send;
+
+    // frame is: "01 08 01 00" | LoadLSB LoadMSB | Cadecho[0|1] | 00 | Mode | Weight | CalLSB CalMSB 
 
     // header for a "run" command
     send.append('\x01');
     send.append('\x08');
     send.append('\x01');
     send.append('\x00');
-    // Load
+    // Load (little endian)
     send.append((char)((nextLoad>>0) & 0xff));
     send.append((char)((nextLoad>>8) & 0xff));
     // Cad-Echo
     send.append((char)(m_events & 0x01));
-    // unknown
+    // unknown - always zero(?)
     send.append('\x00');
-    //
+    // 0 (off), 2 (resistance), 3 (speed/calibrate)
     send.append((char)nextMode);
+    // weight in resistance mode: 
+    //         0x0a: ergo Mode 
+    // other values: weight for simulation/slope mode
     send.append((char)nextWeight);
+    // calibration (little endian)
     send.append((char)((nextCalibrate>>0) & 0xff));
     send.append((char)((nextCalibrate>>8) & 0xff));
 
@@ -221,6 +231,7 @@ void FortiusSerialConnection::requestAll()
 
     const unsigned char *recv = reinterpret_cast<const unsigned char*>(recvData.constData());
 
+    // in running mode: we only  accept standard frames "03 13 02 00" TotalDST_32bit_LE Accel_16bit_LE(?) 
     if(recvData.length() >= 23
             && recv[0] == 0x03
             && recv[1] == 19
@@ -230,21 +241,21 @@ void FortiusSerialConnection::requestAll()
         double speed, power;
         uint8_t cadence;
         int16_t resistance;
-        quint32  poweravg;
+        int32_t poweravg;
 
         //totDistance = recv[4]  | (recv[5] << 8)  | (recv[6] << 16)  | (recv[7] << 24);
-        //accelerate  = recv[10] | (recv[11]<<8);  // unknwon
-        //avgPower    = recv[12] | (recv[13]<<8);  // MAYBE avg. Power
-        //theLoad     = recv[16] | (recv[17]<<8);
-        //theMode     = recv[22];
-        //checksum    = recv[23] | (recv[24]<<8);
+        //accelerate  = recv[10] | (recv[11]<<8);       // some kind of acceleration value - moment of inertia(?)
+        //avgResistance    = recv[12] | (recv[13]<<8);  // avg. resistance (?)
+        //theLoad     = recv[16] | (recv[17]<<8);       // load bounced from command 
+        //theMode     = recv[22];                       // mode bounced from command 
+        //checksum    = recv[23] | (recv[24]<<8);       // verified while unmarshalling
 
         m_rawspeed  = (recv[8] | (recv[9]<<8));
         speed       = (double) m_rawspeed / kph2rawspeed_magic;
         cadence     = recv[20];
         m_events    = recv[18];  // 0x01 pedal-sensor event, 0x04 brake-stops event
-        resistance       = (recv[14] | (recv[15]<<8));
-        power   =  (double) resistance * m_rawspeed / power2load_magic;
+        resistance  = recv[14] | (recv[15]<<8);
+        power       = (double) resistance * m_rawspeed / power2load_magic;   // can be negative in simulation/slope mode
 
         // Avg. power over 10 values
         m_powerhist[m_powerindex] = power;

@@ -86,9 +86,9 @@ private:
 
     uint8_t  m_events;          // stores last event from trainer to trigger cad-sensor signal
     uint16_t m_rawspeed;
-    uint16_t m_powerhist[10];
+    int16_t m_powerhist[10];
     uint8_t  m_powerindex;
-    uint16_t m_power;
+    int16_t m_power;
     uint16_t m_cadence;
     double m_calibrate;
     uint16_t m_weight;
